@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Jogo de Cartões VR</title>
+    <!-- Importa a biblioteca A-Frame -->
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <!-- Importa o Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <!-- Estilos para mensagens -->
+    <style>
+      .messages {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgba(0, 0, 0, 0.85); /* Fundo semi-transparente */
+        color: white;
+        padding: 15px 25px;
+        border-radius: 8px;
+        display: none; /* Oculto por padrão */
+        z-index: 1000;
+        font-family: Arial, sans-serif;
+        font-size: 24px;
+        max-width: 90%;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      /* Estilos para diferentes tipos de mensagens */
+      .messages.info {
+        background-color: rgba(0, 123, 255, 0.9); /* Azul para informações */
+      }
+
+      .messages.error {
+        background-color: rgba(220, 53, 69, 0.9); /* Vermelho para erros */
+      }
+
+      .messages.success {
+        background-color: rgba(40, 167, 69, 0.9); /* Verde para sucessos */
+      }
+
+      /* Estilos para o botão de fechar */
+      .messages .close-btn {
+        position: absolute;
+        top: 5px;
+        right: 10px;
+        background: transparent;
+        border: none;
+        color: white;
+        font-size: 20px;
+        cursor: pointer;
+      }
+
+      .messages .close-btn:hover {
+        color: #ddd;
+      }
+
+      /* Estilos para carta selecionada */
+      .carta-selecionada {
+        /* Este espaço está reservado para quaisquer outras propriedades visuais que você queira adicionar */
+      }
+    </style>
+  </head>
+  <body>
+    <a-scene>
+      <!-- Cubo central visível para ambos os jogadores -->
+      <a-box id="cuboCentral" position="0 0 -4" width="1" height="2" depth="1" color="black">
+        <!-- Texto no cubo central -->
+        <a-text 
+          id="textoCuboCentral" 
+          value="" 
+          align="center" 
+          position="0 0 3"  
+          color="#FFCCDC" 
+          width="2"
+        ></a-text>
+      </a-box>
+
+      <!-- Área onde as cartas do jogador serão exibidas -->
+      <a-entity id="cartoes" position="0 -1.5 -3">
+        <!-- Cartões dinâmicos serão adicionados aqui -->
+      </a-entity>
+
+      <!-- Botão para jogar a carta selecionada -->
+      <a-box id="botaoJogar" position="-2 0 -4" width="2" height="0.5" depth="0.2" color="#FFA500">
+        <a-text value="Jogar Carta" align="center" position="0 0 0.1" color="white"></a-text>
+      </a-box>
+
+      <!-- Botão para passar a vez -->
+      <a-box id="botaoPassarVez" position="2 0 -4" width="2" height="0.5" depth="0.2" color="#607D8B">
+        <a-text value="Passar Vez" align="center" position="0 0 0.1" color="white"></a-text>
+      </a-box>
+            
+      <!-- Câmera e cursor para interagir com os elementos -->
+      <a-entity camera look-controls>
+        <a-cursor
+          fuse="true"
+          fuse-timeout="500"
+          material="color: red; shader: flat"
+          position="0 0 -1"
+          geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.02"
+          raycaster="objects: .carta, #botaoJogar, #botaoPassarVez"
+          animation__mouseenter="property: scale; startEvents: fusing; easing: easeInCubic; dur: 500; from: 1 1 1; to: 0.1 0.1 1"
+          animation__mouseleave="property: scale; startEvents: mouseleave; easing: easeOutElastic; dur: 300; to:1 1 1"
+        ></a-cursor>
+      </a-entity>
+    </a-scene>
+
+    <!-- Div para exibir todas as mensagens -->
+    <div id="messages" class="messages">
+      <button class="close-btn" onclick="hideMessage()">&times;</button>
+      <span id="message-content"></span>
+    </div>
+
+    <script>
+      const socket = io();
+      let jogadorNumero = null;      // Número do jogador (1 ou 2)
+      let cartasJogador = [null, null, null, null, null, null, null];        // Lista de cartas do jogador (7 posições)
+      let cartaSelecionada = null;   // Carta atualmente selecionada
+      let minhaVez = false;          // Controle de turno
+      let cartaJogada = null;        // Carta que o jogador jogou (para remoção)
+      let borderBox = null;          // Variável para armazenar a borda atual
+      let centralCarta = null;       // Identificador da carta central
+
+      // Define as cartas coringa no cliente
+      const cartasCoringa8 = ['A-8', 'B-8', 'C-8', 'D-8'];
+      const cartasCoringa9 = ['A-9', 'B-9', 'C-9', 'D-9'];
+      const todasCartasCoringa = [...cartasCoringa8, ...cartasCoringa9];
+
+      // Define as cartas que permitem jogar novamente
+      const cartasJogarNovamente = ['A-7', 'B-7', 'C-7', 'D-7'];
+      const cartaBloqueioA = ['A-7'];
+      const cartaBloqueioB = ['B-7'];
+      const cartaBloqueioC = ['C-7'];
+      const cartaBloqueioD = ['D-7'];
+      
+      const cartasA = ['A-0', 'A-1', 'A-2', 'A-3', 'A-4', 'A-5', 'A-6'];
+      const cartasB = ['B-0', 'B-1', 'B-2', 'B-3', 'B-4', 'B-5', 'B-6'];
+      const cartasC = ['C-0', 'C-1', 'C-2', 'C-3', 'C-4', 'C-5', 'C-6'];
+      const cartasD = ['D-0', 'D-1', 'D-2', 'D-3', 'D-4', 'D-5', 'D-6'];
+
+      // Lista de posições disponíveis para posicionar as cartas (1 a 7)
+      const posicoesCartas = [
+        {x: -3.6, y: -1, z: -2}, // Posição 1
+        {x: -2.4, y: -1, z: -2}, // Posição 2
+        {x: -1.2, y: -1, z: -2}, // Posição 3
+        {x: 0, y: -1, z: -2},    // Posição 4
+        {x: 1.2, y: -1, z: -2},  // Posição 5
+        {x: 2.4, y: -1, z: -2},  // Posição 6
+        {x: 3.6, y: -1, z: -2},  // Posição 7
+      ];
+
+      // Função para obter a cor da carta com base no identificador
+      function getCardColor(carta) {
+        if (cartasCoringa9.includes(carta)) {
+          return "#adff2f";
+        } else if (cartasCoringa8.includes(carta)) {
+          return "#000000";
+        } else if (cartaBloqueioA.includes(carta)) {
+          return "#ff1616";
+        } else if (cartaBloqueioB.includes(carta)) {
+          return "#fa8b20";
+        } else if (cartaBloqueioC.includes(carta)) {
+          return "#008136";
+        } else if (cartaBloqueioD.includes(carta)) {
+          return "#004aad";
+        } else if (cartasA.includes(carta)) {
+          return "#ff1616";
+        } else if (cartasB.includes(carta)) {
+          return "#fa8b20";
+        } else if (cartasC.includes(carta)) {
+          return "#008136";
+        } else if (cartasD.includes(carta)) {
+          return "#004aad";
+        } else {
+          return "#ffffff"; // Branco padrão para cartas não mapeadas
+        }
+      }
+
+      // Função para encontrar a primeira posição vazia
+      function encontrarPrimeiroEspacoVazio() {
+        for (let i = 0; i < cartasJogador.length; i++) {
+          if (!cartasJogador[i]) {
+            return i;
+          }
+        }
+        return -1; // Mão cheia
+      }
+
+      // Função para atualizar a interface da carta central (texto e cor)
+      function atualizarCartaCentral(carta) {
+        centralCarta = carta.toUpperCase(); // Armazena o identificador da carta
+        console.log(`Atualizando carta central para: ${centralCarta}`);
+
+        const textoCuboCentral = document.querySelector("#textoCuboCentral");
+        const texto = getDisplayText(centralCarta); // Obtém o texto a ser exibido
+        console.log(`Definindo texto central para: ${texto}`);
+        textoCuboCentral.setAttribute("value", texto);
+
+        textoCuboCentral.setAttribute("color", "#FFFFFF"); // Define a cor do texto
+        textoCuboCentral.setAttribute("align", "center");
+        textoCuboCentral.setAttribute("position", "0 0 3"); // Mantém a posição original
+        textoCuboCentral.setAttribute("width", "2");
+
+        const cuboCentral = document.querySelector("#cuboCentral");
+        const cor = getCardColor(centralCarta);
+        console.log(`Definindo cor central para: ${cor}`);
+        cuboCentral.setAttribute("material", `color: ${cor}`);
+      }
+
+      // Função para obter o texto a ser exibido na carta
+      function getDisplayText(carta) {
+        if (cartasCoringa9.includes(carta)) {
+          return "+1";
+        } else if (cartasCoringa8.includes(carta)) {
+          return "A B\nC D"; // Quebra de linha entre 'B' e 'C'
+        } else if (cartasJogarNovamente.includes(carta)) {
+          return "BLOCK";
+        } else {
+          return carta.toUpperCase(); // Retorna o identificador padrão
+        }
+      }
+
+      // Função: Exibe mensagens
+      function showMessage(message, type = 'info') {
+        const messageDiv = document.getElementById('messages');
+        const messageContent = document.getElementById('message-content');
+        messageContent.textContent = message;
+        messageDiv.className = `messages ${type}`;
+        messageDiv.style.display = 'block';
+      }
+
+      // Função: Esconde a mensagem
+      function hideMessage() {
+        const messageDiv = document.getElementById('messages');
+        const messageContent = document.getElementById('message-content');
+        messageDiv.style.display = 'none';
+        messageContent.textContent = '';
+        messageDiv.className = 'messages';
+      }
+
+      // Evento: Conexão inicial com o servidor
+      socket.on("conectar", (dados) => {
+        jogadorNumero = dados.jogador;
+        cartasJogador = dados.cartas;
+        renderizarCartoes();
+        showMessage(`Você é o Jogador ${jogadorNumero}. Aguardando o outro jogador...`, 'info');
+      });
+
+      // Evento: Definição da vez inicial
+      socket.on("definirVezInicial", (vezInicial) => {
+        minhaVez = vezInicial === jogadorNumero;
+        atualizarMensagemDeVez();
+      });
+
+      // Evento: Início do jogo
+      socket.on("iniciarJogo", () => {
+        showMessage("Os dois jogadores estão conectados. O jogo começou!", 'success');
+      });
+
+      // Evento: Atualização da carta central
+      socket.on("atualizarCentro", (carta) => {
+        console.log(`Central atualizado para: ${carta}`);
+        atualizarCartaCentral(carta);
+
+        // Se o jogador jogou esta carta, remove-a da interface
+        if (cartaJogada && cartaJogada.toUpperCase() === carta.toUpperCase()) {
+          removerCartaDaInterface(cartaJogada);
+          cartaJogada = null; // Reseta a carta jogada
+        }
+      });
+
+      // Evento: Recebimento de uma carta adicional (penalidade)
+      socket.on("receberCarta", (dados) => {
+        const { carta, pos } = dados;
+        console.log(`Recebendo carta adicional: ${carta} na posição ${pos}`);
+        if (cartasJogador.filter(c => c !== null).length >= 7) {
+          // Não adiciona a carta se já tiver 7
+          showMessage(`Você já possui o máximo de 7 cartas. A carta ${carta} não pode ser adicionada.`, 'error');
+          return;
+        }
+
+        // Encontra a primeira posição vazia
+        const index = encontrarPrimeiroEspacoVazio();
+        if (index !== -1) {
+          cartasJogador[index] = carta;
+          adicionarCarta(carta, index);
+          showMessage(`Você recebeu a carta ${carta} na posição ${index + 1} devido à jogada especial do adversário!`, 'info');
+        } else {
+          showMessage(`Não há espaço disponível para a carta ${carta}.`, 'error');
+          console.log(`Não foi possível adicionar a carta ${carta} pois a mão está cheia.`);
+        }
+      });
+
+      // Evento: Recebimento de mensagens gerais
+      socket.on("mensagem", (msg) => {
+        console.log(`Mensagem recebida: ${msg}`);
+        showMessage(msg, 'info');
+      });
+
+      // Evento: Jogada inválida
+      socket.on("jogadaInvalida", (msg) => {
+        console.log(`Jogada inválida: ${msg}`);
+        showMessage(msg, 'error');
+      });
+
+      // Evento: Alternância de turno
+      socket.on("alternarVez", (jogadorDaVez) => {
+        minhaVez = jogadorDaVez === jogadorNumero;
+        atualizarMensagemDeVez();
+      });
+
+      // Evento: Fim de Jogo
+      socket.on("fimDeJogo", (dados) => {
+        const { vencedor } = dados;
+        if (vencedor === jogadorNumero) {
+          showMessage("Parabéns! Você venceu o jogo!", 'success');
+        } else {
+          showMessage("Você perdeu! O outro jogador venceu o jogo.", 'error');
+        }
+        // Desabilitar botões ou oferecer opção de reinício
+        document.querySelector("#botaoJogar").setAttribute("visible", "false");
+        document.querySelector("#botaoPassarVez").setAttribute("visible", "false");
+      });
+
+      // Evento: Resetar o jogo (quando um jogador se desconecta ou após vitória)
+      socket.on("resetarJogo", () => {
+        showMessage("O jogo foi reiniciado. Aguardando novos jogadores...", 'error');
+        limparCartas();
+        document.querySelector("#botaoJogar").setAttribute("visible", "true");
+        document.querySelector("#botaoPassarVez").setAttribute("visible", "true");
+      });
+
+      // Função: Atualiza a mensagem de vez
+      function atualizarMensagemDeVez() {
+        if (minhaVez) {
+          showMessage("É a sua vez de jogar!", 'info');
+          console.log("É a sua vez de jogar!");
+        } else {
+          showMessage("Aguarde, é a vez do outro jogador.", 'info');
+          console.log("Aguarde, é a vez do outro jogador.");
+        }
+      }
+
+      // Função: Renderiza as cartas do jogador na cena
+      function renderizarCartoes() {
+        const container = document.querySelector("#cartoes");
+        container.innerHTML = ""; // Limpa o container antes de renderizar
+
+        cartasJogador.forEach((carta, index) => {
+          if (carta) {
+            adicionarCarta(carta, index);
+          }
+        });
+      }
+
+      // Função: Adiciona uma carta na cena em uma posição específica
+      function adicionarCarta(carta, index) {
+        console.log(`Adicionando carta ${carta} na posição ${index + 1}`);
+        const container = document.querySelector("#cartoes");
+
+        // Cria o cubo representando a carta
+        const cubo = document.createElement("a-box");
+        const pos = posicoesCartas[index];
+        cubo.setAttribute("position", `${pos.x} ${pos.y} ${pos.z}`);
+        cubo.setAttribute("depth", "0.1");
+        cubo.setAttribute("height", "2");
+        cubo.setAttribute("width", "1");
+
+        // Define a cor baseada no tipo de coringa ou carta especial
+        cubo.setAttribute("material", `color: ${getCardColor(carta)}`);
+
+        // Define o ID do cubo como a posição seguida da carta para facilitar a identificação
+        cubo.setAttribute("id", `pos${index + 1}-${carta.toUpperCase()}`);
+        cubo.classList.add("carta"); // Classe para identificar objetos interativos
+
+        // Adiciona o identificador da carta como um atributo de dados
+        cubo.setAttribute("data-carta", carta.toUpperCase());
+
+        // Cria o elemento de texto
+        const texto = document.createElement("a-text");
+        
+        // Define a cor do texto baseada no tipo de coringa ou carta especial
+        let corTexto = "#FFFFFF"; // Padrão branco
+        if (cartasCoringa9.includes(carta)) {
+          corTexto = "#000000"; // Preto para cartas que permitem jogar novamente
+        }
+
+        texto.setAttribute("color", corTexto);
+        const displayText = getDisplayText(carta);
+        texto.setAttribute("value", displayText);
+        texto.setAttribute("align", "center");
+        texto.setAttribute("position", "0 0 0.06"); // Mantém a posição original
+        texto.setAttribute("width", "4");
+
+        cubo.appendChild(texto);
+
+        // Evento de clique para selecionar a carta
+        cubo.addEventListener("click", () => selecionarCarta(carta, cubo));
+        container.appendChild(cubo); // Adiciona o cubo ao container
+      }
+
+      // Função: Seleciona uma carta (destaca-a visualmente)
+      function selecionarCarta(carta, cubo) {
+        console.log(`Selecionando carta: ${carta}`);
+        
+        if (cartaSelecionada) {
+          cartaSelecionada.classList.remove("carta-selecionada");
+        }
+        
+        cubo.classList.add("carta-selecionada"); // Adiciona a classe para destacar a carta
+        cartaSelecionada = cubo; // Atualiza a carta selecionada
+
+        // Remove a borda anterior, se existir
+        if (borderBox) {
+          borderBox.parentNode.removeChild(borderBox);
+          borderBox = null;
+        }
+
+        // Obtém a posição da carta selecionada
+        const pos = cubo.getAttribute('position');
+        const scale = cubo.getAttribute('scale') || {x:1, y:1, z:1};
+
+        // Cria uma nova borda
+        const border = document.createElement('a-box');
+        
+        // Define a posição da borda um pouco atrás da carta
+        border.setAttribute('position', {
+          x: pos.x,
+          y: pos.y - 1.5,
+          z: pos.z - 3.02
+        });
+        
+        // Define dimensões ligeiramente maiores que a carta
+        border.setAttribute('width', 1.2 * scale.x);
+        border.setAttribute('height', 2.2 * scale.y);
+        border.setAttribute('depth', 0.1);
+        
+        // Define o material da borda (amarelo semi-transparente)
+        border.setAttribute('material', 'color: yellow; opacity: 0.5; side: double');
+        
+        // Adiciona uma classe para facilitar a identificação (opcional)
+        border.setAttribute('class', 'border-box');
+
+        // Adiciona a borda à cena
+        const scene = document.querySelector('a-scene');
+        scene.appendChild(border);
+
+        // Atualiza a referência da borda atual
+        borderBox = border;
+      }
+
+      // Função: Remove a carta da interface do jogador após jogar
+      function removerCartaDaInterface(carta) {
+        // Encontra o índice da carta na mão
+        const index = cartasJogador.findIndex(c => c && c.toUpperCase() === carta.toUpperCase());
+        if (index !== -1) {
+          cartasJogador[index] = null; // Remove a carta da mão
+          // Remove o elemento A-Frame correspondente
+          const cartaElement = document.getElementById(`pos${index + 1}-${carta.toUpperCase()}`);
+          if (cartaElement) {
+            cartaElement.parentNode.removeChild(cartaElement);
+            console.log(`Carta ${carta} removida da posição ${index + 1} na interface.`);
+          }
+          // Remove a borda se a carta removida estava selecionada
+          if (cartaElement === cartaSelecionada) {
+            if (borderBox) {
+              borderBox.parentNode.removeChild(borderBox);
+              borderBox = null;
+            }
+            cartaSelecionada = null;
+          }
+        }
+      }
+
+      // Função: Limpa todas as cartas da interface (após resetar o jogo)
+      function limparCartas() {
+        const container = document.querySelector("#cartoes");
+        container.innerHTML = "";
+        cartasJogador = [null, null, null, null, null, null, null];
+        console.log("Todas as cartas foram removidas da interface.");
+        // Remove a borda atual, se existir
+        if (borderBox) {
+          borderBox.parentNode.removeChild(borderBox);
+          borderBox = null;
+        }
+        cartaSelecionada = null;
+      }
+
+      // Função: Verifica se a carta pode ser jogada (compatibilidade)
+      function isCartaCompatível(carta, valorAtual) {
+        console.log(`Verificando compatibilidade para carta: ${carta} com central: ${valorAtual}`);
+        if (!valorAtual) return true; // Sem carta central, qualquer carta pode ser jogada
+
+        // Verifica se a carta está no formato esperado
+        if (!carta.includes('-') || !valorAtual.includes('-')) {
+          console.error("Formato de carta inválido.");
+          return false;
+        }
+
+        const [letraCarta, numeroCarta] = carta.split('-').map(part => part.toUpperCase());
+        const [letraAtual, numeroAtual] = valorAtual.split('-').map(part => part.toUpperCase());
+
+        // Se a carta for coringa, pode ser jogada independentemente
+        if (todasCartasCoringa.includes(carta)) {
+          console.log(`${carta} é uma carta coringa.`);
+          return true;
+        }
+
+        // Regra de negócio: Se a carta central tem número 8 ou 9, qualquer carta pode ser jogada
+        if (numeroAtual === '8' || numeroAtual === '9') {
+          console.log('8 e 9 aceitam ser substituídas por qualquer carta por serem coringas.');
+          return true;
+        }
+
+        // Verifica compatibilidade com a carta central
+        const compatível = letraCarta === letraAtual || numeroCarta === numeroAtual;
+        console.log(`Compatível: ${compatível}`);
+        return compatível;
+      }
+
+      // Evento: Clique no botão "Jogar Carta"
+      document.querySelector("#botaoJogar").addEventListener("click", () => {
+        if (minhaVez && cartaSelecionada) {
+          // Obtenha o identificador da carta a partir do atributo de dados
+          const valorCarta = cartaSelecionada.getAttribute("data-carta").toUpperCase();
+          // Utilize a variável centralCarta em vez do valor do texto
+          const valorAtualCubo = centralCarta;
+
+          console.log(`Tentando jogar a carta: ${valorCarta} sobre a central: ${valorAtualCubo}`);
+
+          // Verifica a compatibilidade
+          if (isCartaCompatível(valorCarta, valorAtualCubo)) {
+            // Define a carta jogada para remoção após receber a confirmação
+            cartaJogada = valorCarta;
+
+            // Envia o valor da carta selecionada ao servidor
+            socket.emit("jogarCarta", { carta: valorCarta });
+
+            // A remoção da carta será feita após receber 'atualizarCentro' para garantir sincronização
+          } else {
+            console.log("Incompatível: a carta selecionada não combina com o cubo central.");
+            showMessage("Carta incompatível! Não pode ser jogada.", 'error');
+          }
+        } else if (!minhaVez) {
+          console.log("Aguarde, ainda não é a sua vez.");
+          showMessage("Aguarde, ainda não é a sua vez.", 'info');
+        } else {
+          showMessage("Selecione uma carta antes de jogar!", 'info');
+        }
+      });
+
+      // Evento: Clique no botão "Passar Vez"
+      document.querySelector("#botaoPassarVez").addEventListener("click", () => {
+        if (minhaVez) {
+          // Envia o evento para passar a vez
+          socket.emit("passarVez");
+          console.log("Jogador passou a vez.");
+          showMessage("Você passou a vez.", 'info');
+        } else {
+          console.log("Não é a sua vez para passar.");
+          showMessage("Não é a sua vez para passar.", 'info');
+        }
+      });
+    </script>
+  </body>
+</html>
